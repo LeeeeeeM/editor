@@ -1,6 +1,6 @@
 import React from 'react'
 import { Realm, RealmContext } from '@mdxeditor/gurx'
-import { tap } from './utils/fp'
+import { disposeRealmSession } from './realmSession'
 
 /**
  * A plugin for the editor.
@@ -43,23 +43,39 @@ export function realmPlugin<Params>(plugin: {
 
 /** @internal */
 export function RealmWithPlugins({ children, plugins }: { children: React.ReactNode; plugins: RealmPlugin[] }) {
-  const theRealm = React.useMemo(() => {
-    return tap(new Realm(), (r) => {
+  const [theRealm, setTheRealm] = React.useState<Realm | null>(null)
+
+  React.useEffect(() => {
+    const realm = new Realm()
+    try {
       for (const plugin of plugins) {
-        plugin.init?.(r)
+        plugin.init?.(realm)
       }
       for (const plugin of plugins) {
-        plugin.postInit?.(r)
+        plugin.postInit?.(realm)
       }
-    })
+    } catch (error) {
+      disposeRealmSession(realm)
+      throw error
+    }
+    setTheRealm(realm)
+    return () => {
+      disposeRealmSession(realm)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   React.useEffect(() => {
-    for (const plugin of plugins) {
-      plugin.update?.(theRealm)
+    if (theRealm) {
+      for (const plugin of plugins) {
+        plugin.update?.(theRealm)
+      }
     }
   })
+
+  if (!theRealm) {
+    return null
+  }
 
   return <RealmContext.Provider value={theRealm}>{children}</RealmContext.Provider>
 }
