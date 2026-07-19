@@ -59,7 +59,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npm exec playwright install --with-deps chromium firefox webkit
+        run: npm exec -- playwright install --with-deps chromium firefox webkit
 
       - name: Test browser compatibility
         run: npm run test:browser
@@ -95,7 +95,7 @@ jobs:
         run: npm ci
 
       - name: Install package-gate browser
-        run: npm exec playwright install --with-deps chromium
+        run: npm exec -- playwright install --with-deps chromium
 
       - name: Build
         run: npm run build
