@@ -1,4 +1,4 @@
-import { useCellValue, useCellValues, usePublisher, useRealm } from '@mdxeditor/gurx'
+import { type Realm, useCellValue, useCellValues, usePublisher, useRealm } from '@mdxeditor/gurx'
 import React, { JSX } from 'react'
 import {
   activeEditor$,
@@ -31,15 +31,14 @@ import {
 } from './plugins/core'
 import { RealmPlugin, RealmWithPlugins } from './RealmWithPlugins'
 
-import { createLexicalComposerContext, LexicalComposerContext, LexicalComposerContextType } from '@lexical/react/LexicalComposerContext'
+import { LexicalExtensionEditorComposer } from '@lexical/react/LexicalExtensionEditorComposer'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import classNames from 'classnames'
-import { EditorState, EditorThemeClasses, LexicalEditor } from 'lexical'
+import { EditorState, EditorThemeClasses, LexicalEditorWithDispose } from 'lexical'
 import { defaultSvgIcons, IconKey } from './defaultSvgIcons'
 import { ToMarkdownOptions } from './exportMarkdownFromLexical'
-import { lexicalTheme } from './styles/lexicalTheme'
 import styles from './styles/ui.module.css'
 import { noop } from './utils/fp'
 import { getSelectionAsMarkdown } from './utils/lexicalHelpers'
@@ -47,12 +46,8 @@ import { getSelectionAsMarkdown } from './utils/lexicalHelpers'
 const LexicalProvider: React.FC<{
   children: JSX.Element | string | (JSX.Element | string)[]
 }> = ({ children }) => {
-  const rootEditor = useCellValue(rootEditor$)!
-  const composerContextValue = React.useMemo(() => {
-    return [rootEditor, createLexicalComposerContext(null, lexicalTheme)] as [LexicalEditor, LexicalComposerContextType]
-  }, [rootEditor])
-
-  return <LexicalComposerContext.Provider value={composerContextValue}>{children}</LexicalComposerContext.Provider>
+  const rootEditor = useCellValue(rootEditor$) as LexicalEditorWithDispose
+  return <LexicalExtensionEditorComposer initialEditor={rootEditor}>{children}</LexicalExtensionEditorComposer>
 }
 
 const RichTextEditor: React.FC = () => {
@@ -170,7 +165,8 @@ export interface MDXEditorMethods {
   getContentEditableHTML: () => string
 
   /**
-   * Gets the markdown representation of the current selection.
+   * Gets the markdown representation of the active root or nested editor selection
+   * using the editor's configured visitors and serialization options.
    * Returns an empty string if there is no selection, if selection is collapsed, or if editor is in source/diff mode.
    */
   getSelectionMarkdown: () => string
@@ -225,71 +221,75 @@ const EditorRootElement: React.FC<{
   )
 }
 
-const Methods: React.FC<{ mdxRef: React.ForwardedRef<MDXEditorMethods> }> = ({ mdxRef }) => {
-  const realm = useRealm()
-
-  React.useImperativeHandle(
-    mdxRef,
-    () => {
-      return {
-        getMarkdown: () => {
-          const viewMode = realm.getValue(viewMode$)
-          if (viewMode === 'source' || viewMode === 'diff') {
-            return realm.getValue(markdownSourceEditorValue$)
-          }
-
-          return realm.getValue(markdown$)
-        },
-        setMarkdown: (markdown) => {
-          realm.pub(setMarkdown$, markdown)
-        },
-        insertMarkdown: (markdown) => {
-          realm.pub(insertMarkdown$, markdown)
-        },
-        focus: (
-          callbackFn?: () => void,
-          opts?: {
-            defaultSelection?: 'rootStart' | 'rootEnd'
-            preventScroll?: boolean
-          }
-        ) => {
-          realm.getValue(rootEditor$)?.focus(callbackFn, opts)
-        },
-        getContentEditableHTML: () => {
-          return realm.getValue(contentEditableRef$)?.current.innerHTML ?? ''
-        },
-        getSelectionMarkdown: () => {
-          // Return empty string in source/diff mode
-          const viewMode = realm.getValue(viewMode$)
-          if (viewMode === 'source' || viewMode === 'diff') {
-            return ''
-          }
-
-          // Use activeEditor$ for nested editor support
-          const activeEditor = realm.getValue(activeEditor$)
-          if (!activeEditor) {
-            return ''
-          }
-
-          // Get all export parameters from realm
-          const visitors = realm.getValue(exportVisitors$)
-          const toMarkdownExtensions = realm.getValue(toMarkdownExtensions$)
-          const toMarkdownOptions = realm.getValue(toMarkdownOptions$)
-          const jsxComponentDescriptors = realm.getValue(jsxComponentDescriptors$)
-          const jsxIsAvailable = realm.getValue(jsxIsAvailable$)
-
-          return getSelectionAsMarkdown(activeEditor, {
-            visitors,
-            toMarkdownExtensions,
-            toMarkdownOptions,
-            jsxComponentDescriptors,
-            jsxIsAvailable
-          })
-        }
+function createMethods(realm: Realm): MDXEditorMethods {
+  return {
+    getMarkdown: () => {
+      const viewMode = realm.getValue(viewMode$)
+      if (viewMode === 'source' || viewMode === 'diff') {
+        return realm.getValue(markdownSourceEditorValue$)
       }
+
+      return realm.getValue(markdown$)
     },
-    [realm]
-  )
+    setMarkdown: (markdown) => {
+      realm.pub(setMarkdown$, markdown)
+    },
+    insertMarkdown: (markdown) => {
+      realm.pub(insertMarkdown$, markdown)
+    },
+    focus: (
+      callbackFn?: () => void,
+      opts?: {
+        defaultSelection?: 'rootStart' | 'rootEnd'
+        preventScroll?: boolean
+      }
+    ) => {
+      realm.getValue(rootEditor$)?.focus(callbackFn, opts)
+    },
+    getContentEditableHTML: () => {
+      return realm.getValue(contentEditableRef$)?.current.innerHTML ?? ''
+    },
+    getSelectionMarkdown: () => {
+      const viewMode = realm.getValue(viewMode$)
+      if (viewMode === 'source' || viewMode === 'diff') {
+        return ''
+      }
+
+      const activeEditor = realm.getValue(activeEditor$)
+      if (!activeEditor) {
+        return ''
+      }
+
+      const visitors = realm.getValue(exportVisitors$)
+      const toMarkdownExtensions = realm.getValue(toMarkdownExtensions$)
+      const toMarkdownOptions = realm.getValue(toMarkdownOptions$)
+      const jsxComponentDescriptors = realm.getValue(jsxComponentDescriptors$)
+      const jsxIsAvailable = realm.getValue(jsxIsAvailable$)
+
+      return getSelectionAsMarkdown(activeEditor, {
+        visitors,
+        toMarkdownExtensions,
+        toMarkdownOptions,
+        jsxComponentDescriptors,
+        jsxIsAvailable
+      })
+    }
+  }
+}
+
+const Methods: React.FC<{
+  onReady: (methods: MDXEditorMethods) => void
+  onDispose: (methods: MDXEditorMethods) => void
+}> = ({ onReady, onDispose }) => {
+  const realm = useRealm()
+  const methods = React.useMemo(() => createMethods(realm), [realm])
+
+  React.useLayoutEffect(() => {
+    onReady(methods)
+    return () => {
+      onDispose(methods)
+    }
+  }, [methods, onDispose, onReady])
   return null
 }
 
@@ -405,6 +405,82 @@ export interface MDXEditorProps {
  * @group MDXEditor
  */
 export const MDXEditor = React.forwardRef<MDXEditorMethods, MDXEditorProps>((props, ref) => {
+  const realmMethods = React.useRef<MDXEditorMethods | null>(null)
+  const replayingRealmMethods = React.useRef<MDXEditorMethods | null>(null)
+  const pendingMethodCalls = React.useRef<((methods: MDXEditorMethods) => void)[]>([])
+  const preReadyMarkdown = React.useRef(props.trim === false ? props.markdown : props.markdown.trim())
+  const callWhenReady = React.useCallback((call: (methods: MDXEditorMethods) => void) => {
+    const methods = realmMethods.current
+    if (methods && replayingRealmMethods.current === null) {
+      call(methods)
+    } else {
+      pendingMethodCalls.current.push(call)
+    }
+  }, [])
+  const publicMethods = React.useMemo<MDXEditorMethods>(
+    () => ({
+      getMarkdown: () => realmMethods.current?.getMarkdown() ?? preReadyMarkdown.current,
+      setMarkdown: (markdown) => {
+        preReadyMarkdown.current = markdown
+        callWhenReady((methods) => {
+          methods.setMarkdown(markdown)
+        })
+      },
+      insertMarkdown: (markdown) => {
+        callWhenReady((methods) => {
+          methods.insertMarkdown(markdown)
+        })
+      },
+      focus: (callbackFn, opts) => {
+        callWhenReady((methods) => {
+          methods.focus(callbackFn, opts)
+        })
+      },
+      getContentEditableHTML: () => realmMethods.current?.getContentEditableHTML() ?? '',
+      getSelectionMarkdown: () => realmMethods.current?.getSelectionMarkdown() ?? ''
+    }),
+    [callWhenReady]
+  )
+  const attachRealmMethods = React.useCallback((methods: MDXEditorMethods) => {
+    realmMethods.current = methods
+    if (replayingRealmMethods.current === methods) {
+      return
+    }
+    if (pendingMethodCalls.current.length === 0) {
+      preReadyMarkdown.current = methods.getMarkdown()
+      return
+    }
+
+    replayingRealmMethods.current = methods
+    const replayNext = () => {
+      if (realmMethods.current !== methods) {
+        if (replayingRealmMethods.current === methods) {
+          replayingRealmMethods.current = null
+        }
+        return
+      }
+
+      const call = pendingMethodCalls.current.shift()
+      if (!call) {
+        replayingRealmMethods.current = null
+        preReadyMarkdown.current = methods.getMarkdown()
+        return
+      }
+
+      call(methods)
+      queueMicrotask(replayNext)
+    }
+    replayNext()
+  }, [])
+  const detachRealmMethods = React.useCallback((methods: MDXEditorMethods) => {
+    if (realmMethods.current === methods) {
+      preReadyMarkdown.current = methods.getMarkdown()
+      realmMethods.current = null
+    }
+  }, [])
+
+  React.useImperativeHandle(ref, () => publicMethods, [publicMethods])
+
   return (
     <RealmWithPlugins
       plugins={[
@@ -437,7 +513,7 @@ export const MDXEditor = React.forwardRef<MDXEditorMethods, MDXEditorProps>((pro
           <RichTextEditor />
         </LexicalProvider>
       </EditorRootElement>
-      <Methods mdxRef={ref} />
+      <Methods onReady={attachRealmMethods} onDispose={detachRealmMethods} />
     </RealmWithPlugins>
   )
 })

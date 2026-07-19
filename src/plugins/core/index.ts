@@ -1,5 +1,5 @@
 import { realmPlugin } from '../../RealmWithPlugins'
-import { createEmptyHistoryState } from '@lexical/react/LexicalHistoryPlugin.js'
+import { createEmptyHistoryState } from '@lexical/history'
 import { $isHeadingNode, HeadingTagType } from '@lexical/rich-text'
 import { $setBlocksType } from '@lexical/selection'
 import { $findMatchingParent, $insertNodeToNearestRoot, $wrapNodeInElement } from '@lexical/utils'
@@ -30,8 +30,7 @@ import {
   SELECTION_CHANGE_COMMAND,
   TextFormatType,
   TextNode,
-  createCommand,
-  createEditor
+  createCommand
 } from 'lexical'
 import * as Mdast from 'mdast'
 
@@ -68,13 +67,14 @@ import { MdastHTMLVisitor } from './MdastHTMLVisitor'
 import { MdastParagraphVisitor } from './MdastParagraphVisitor'
 import { MdastRootVisitor } from './MdastRootVisitor'
 import { MdastTextVisitor } from './MdastTextVisitor'
-import { SharedHistoryPlugin } from './SharedHistoryPlugin'
 import { DirectiveDescriptor } from '../directives'
 import { CodeBlockEditorDescriptor } from '../codeblock'
 import { comment, commentFromMarkdown } from '../../mdastUtilHtmlComment'
 import { lexicalTheme } from '../../styles/lexicalTheme'
 import { FORMAT } from '../../FormatConstants'
 import { IconKey } from '../../defaultSvgIcons'
+import { registerRealmCleanup } from '../../realmSession'
+import { createExtensionEditor } from './lexicalExtensions'
 export * from './MdastHTMLNode'
 export * from './GenericHTMLNode'
 
@@ -742,7 +742,7 @@ export const editorWrappers$ = Cell<React.ComponentType<{ children: React.ReactN
 export const addEditorWrapper$ = Appender(editorWrappers$)
 
 /**
- * React Components registered to be rendered inside `LexicalNestedComposer`. Useful if you're using lexical editor plugins that are wrapped as react components.
+ * React components registered inside each nested editor's standard Lexical composer context. Useful for Lexical plugins wrapped as React components.
  * @group Core
  */
 export const nestedEditorChildren$ = Cell<React.ComponentType[]>([])
@@ -976,6 +976,7 @@ export const corePlugin = realmPlugin<{
       [placeholder$]: params?.placeholder,
       [readOnly$]: params?.readOnly,
       [translation$]: params?.translation,
+      [historyState$]: createEmptyHistoryState(),
       [addMdastExtension$]: [gfmStrikethroughFromMarkdown(), highlightMarkFromMarkdown],
       [addSyntaxExtension$]: [gfmStrikethrough(), highlightMark()],
       [addToMarkdownExtension$]: [mdxJsxToMarkdown(), gfmStrikethroughToMarkdown(), highlightMarkToMarkdown],
@@ -996,44 +997,39 @@ export const corePlugin = realmPlugin<{
         [addImportVisitor$]: MdastHTMLVisitor
       })
     }
-
-    if (!params?.suppressSharedHistory) {
-      r.pub(addComposerChild$, SharedHistoryPlugin)
-    }
   },
 
   postInit(r, params) {
-    const newEditor = createEditor({
-      // ...(params?.editorState ? { editorState: params.editorState } : {}),
+    const newEditor = createExtensionEditor({
+      name: '@mdxeditor/root',
       editable: params?.readOnly !== true,
       namespace: params?.lexicalEditorNamespace ?? 'MDXEditor',
       nodes: [...r.getValue(usedLexicalNodes$), ...(params?.additionalLexicalNodes ?? [])],
-      onError: (error) => {
-        throw error
-      },
-      theme: r.getValue(lexicalTheme$)
+      theme: r.getValue(lexicalTheme$),
+      historyMode: params?.suppressSharedHistory ? 'none' : 'root-shared',
+      historyState: r.getValue(historyState$),
+      initialEditorState:
+        params?.editorState === null
+          ? null
+          : () => {
+              const markdown = params?.initialMarkdown.trim() ?? ''
+              tryImportingMarkdown(r, $getRoot(), markdown)
+            }
     })
 
-    if (params?.editorState !== null) {
-      newEditor.update(() => {
-        const markdown = params?.initialMarkdown.trim() ?? ''
-        tryImportingMarkdown(r, $getRoot(), markdown)
+    registerRealmCleanup(r, () => {
+      newEditor.dispose()
+    })
 
-        const autoFocusValue = params?.autoFocus
-        if (autoFocusValue) {
-          if (autoFocusValue === true) {
-            // Default 'on' state
-            setTimeout(() => {
-              newEditor.focus(noop, { defaultSelection: 'rootStart' })
-            })
-            return
-          }
-          setTimeout(() => {
-            newEditor.focus(noop, {
-              defaultSelection: autoFocusValue.defaultSelection ?? 'rootStart'
-            })
-          })
-        }
+    const autoFocusValue = params?.autoFocus
+    if (params?.editorState !== null && autoFocusValue) {
+      const autoFocusTimer = setTimeout(() => {
+        newEditor.focus(noop, {
+          defaultSelection: autoFocusValue === true ? 'rootStart' : autoFocusValue.defaultSelection ?? 'rootStart'
+        })
+      })
+      registerRealmCleanup(r, () => {
+        clearTimeout(autoFocusTimer)
       })
     }
 

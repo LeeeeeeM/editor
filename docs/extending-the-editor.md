@@ -161,4 +161,8 @@ The MDXEditor rich-text editing is built on top of the [Lexical framework](https
 
 Lexical is a powerful framework, so understanding its concepts is a challenge on its own. After [the docs themselves](https://lexical.dev/), A good place to start learning by example is the [Lexical playground source code](https://github.com/facebook/lexical/tree/main/packages/lexical-playground).
 
-_Note: Lexical has its own react-based plugin system, which MDXEditor does not use._
+## Supported extension boundary
+
+MDXEditor constructs its root and nested Lexical editors with Lexical extensions internally. Those construction extensions are an implementation detail, not an additional consumer plugin API. Consumer integrations should continue to use `realmPlugin`, Gurx cells and signals, Markdown import/export visitors, registered Lexical nodes, and the composer-child signals exported by MDXEditor.
+
+Components registered through `addComposerChild$`, `addNestedEditorChild$`, and `addTableCellEditorChild$` remain ordinary React components. They run inside the standard Lexical composer context, so existing React plugins that use hooks such as `useLexicalComposerContext` do not need to become Lexical extensions. Do not import MDXEditor's private extension factory or depend on its root, nested, or history extension layout; those internals may change without changing the supported MDXEditor contracts.

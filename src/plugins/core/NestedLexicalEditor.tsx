@@ -12,8 +12,8 @@ import {
   EditorConfig,
   KEY_BACKSPACE_COMMAND,
   LexicalEditor,
+  LexicalEditorWithDispose,
   SELECTION_CHANGE_COMMAND,
-  createEditor,
   COMMAND_PRIORITY_LOW
 } from 'lexical'
 import * as Mdast from 'mdast'
@@ -32,23 +32,24 @@ import {
   lexicalTheme$,
   nestedEditorChildren$,
   rootEditor$,
+  historyState$,
   usedLexicalNodes$
 } from '.'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
-import { LexicalNestedComposer } from '@lexical/react/LexicalNestedComposer'
+import { LexicalExtensionEditorComposer } from '@lexical/react/LexicalExtensionEditorComposer'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import classNames from 'classnames'
 import { exportLexicalTreeToMdast } from '../../exportMarkdownFromLexical'
 import { importMdastTreeToLexical } from '../../importMarkdownToLexical'
 import styles from '../../styles/ui.module.css'
-import { SharedHistoryPlugin } from './SharedHistoryPlugin'
 import { mergeRegister } from '@lexical/utils'
 import { VoidEmitter } from '../../utils/voidEmitter'
 import { isPartOftheEditorUI } from '../../utils/isPartOftheEditorUI'
 import { useCellValues, usePublisher, useRealm } from '@mdxeditor/gurx'
 import { DirectiveNode } from '../directives'
 import { LexicalJsxNode } from '../jsx/LexicalJsxNode'
+import { createExtensionEditor, editorHasSharedHistory } from './lexicalExtensions'
 
 /**
  * The value of the {@link NestedEditorsContext} React context.
@@ -178,7 +179,7 @@ export const NestedLexicalEditor = function <T extends Mdast.RootContent>(props:
   block?: boolean
 }) {
   const { getContent, getUpdatedMdastNode, contentEditableProps, block = false } = props
-  const { mdastNode, lexicalNode, focusEmitter } = useNestedEditorContext<T>()
+  const { parentEditor, mdastNode, lexicalNode, focusEmitter } = useNestedEditorContext<T>()
   const updateMdastNode = useMdastNodeUpdater<T>()
   const removeNode = useLexicalNodeRemove()
   const content = getContent(mdastNode)
@@ -212,52 +213,70 @@ export const NestedLexicalEditor = function <T extends Mdast.RootContent>(props:
 
   const setEditorInFocus = usePublisher(editorInFocus$)
 
-  const [editor] = React.useState(() => {
-    const editor = createEditor({
-      nodes: usedLexicalNodes,
-      theme: realm.getValue(lexicalTheme$),
-      namespace: 'NestedEditor'
-    })
-    return editor
-  })
+  const [editor, setEditor] = React.useState<LexicalEditorWithDispose | null>(null)
 
   React.useEffect(() => {
+    if (!rootEditor) {
+      return
+    }
+    const editor = createExtensionEditor({
+      name: '@mdxeditor/nested',
+      nodes: usedLexicalNodes,
+      theme: lexicalTheme,
+      namespace: 'NestedEditor',
+      parentEditor,
+      historyMode: editorHasSharedHistory(rootEditor) ? 'nested-shared' : 'nested-external',
+      historyState: realm.getValue(historyState$),
+      initialEditorState: () => {
+        let theContent: Mdast.PhrasingContent[] | Mdast.RootContent[] = content
+        if (block) {
+          if (theContent.length === 0) {
+            theContent = [{ type: 'paragraph', children: [] }]
+          }
+        } else {
+          theContent = [{ type: 'paragraph', children: content as Mdast.PhrasingContent[] }]
+        }
+
+        importMdastTreeToLexical({
+          root: $getRoot(),
+          mdastRoot: {
+            type: 'root',
+            children: theContent
+          },
+          visitors: importVisitors,
+          directiveDescriptors,
+          codeBlockEditorDescriptors,
+          defaultCodeBlockLanguage,
+          jsxComponentDescriptors
+        })
+      }
+    })
+    setEditor(editor)
+    return () => {
+      editor.dispose()
+    }
+    // The editor owns the complete mount-time plugin/configuration snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  React.useEffect(() => {
+    if (!editor) {
+      return
+    }
     focusEmitter.subscribe(() => {
       editor.focus()
     })
+    return () => {
+      focusEmitter.subscribe(() => undefined)
+    }
   }, [editor, focusEmitter])
 
   React.useEffect(() => {
-    editor.update(() => {
-      $getRoot().clear()
-      let theContent: Mdast.PhrasingContent[] | Mdast.RootContent[] = content
-      if (block) {
-        if (theContent.length === 0) {
-          theContent = [{ type: 'paragraph', children: [] }]
-        }
-      } else {
-        theContent = [{ type: 'paragraph', children: content as Mdast.PhrasingContent[] }]
-      }
-
-      importMdastTreeToLexical({
-        root: $getRoot(),
-        mdastRoot: {
-          type: 'root',
-          children: theContent
-        },
-        visitors: importVisitors,
-        directiveDescriptors,
-        codeBlockEditorDescriptors,
-        defaultCodeBlockLanguage,
-        jsxComponentDescriptors
-      })
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, block, importVisitors])
-
-  React.useEffect(() => {
+    if (!editor) {
+      return
+    }
     function updateParentNode() {
-      editor.getEditorState().read(() => {
+      editor!.getEditorState().read(() => {
         const mdast = exportLexicalTreeToMdast({
           root: $getRoot(),
           visitors: exportVisitors,
@@ -338,8 +357,12 @@ export const NestedLexicalEditor = function <T extends Mdast.RootContent>(props:
     rootEditor
   ])
 
+  if (!editor) {
+    return null
+  }
+
   return (
-    <LexicalNestedComposer initialEditor={editor} initialTheme={lexicalTheme}>
+    <LexicalExtensionEditorComposer initialEditor={editor}>
       <RichTextPlugin
         contentEditable={
           <ContentEditable {...contentEditableProps} className={classNames(styles.nestedEditor, contentEditableProps?.className)} />
@@ -347,10 +370,9 @@ export const NestedLexicalEditor = function <T extends Mdast.RootContent>(props:
         placeholder={null}
         ErrorBoundary={LexicalErrorBoundary}
       />
-      <SharedHistoryPlugin />
       {nestedEditorChildren.map((Child, index) => (
         <Child key={index} />
       ))}
-    </LexicalNestedComposer>
+    </LexicalExtensionEditorComposer>
   )
 }

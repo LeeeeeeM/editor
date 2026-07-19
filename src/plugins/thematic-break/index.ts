@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-deprecated -- The legacy React horizontal-rule path remains the compatibility implementation; extension migration is tracked separately. */
 import { realmPlugin } from '../../RealmWithPlugins'
 import { HorizontalRuleNode, INSERT_HORIZONTAL_RULE_COMMAND } from '@lexical/react/LexicalHorizontalRuleNode.js'
 import { HorizontalRulePlugin } from '@lexical/react/LexicalHorizontalRulePlugin.js'

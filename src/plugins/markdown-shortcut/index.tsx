@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-deprecated -- The legacy React horizontal-rule path remains the compatibility implementation; extension migration is tracked separately. */
 import React from 'react'
 import {
   BOLD_ITALIC_STAR,

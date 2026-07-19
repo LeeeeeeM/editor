@@ -1,6 +1,6 @@
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
-import { LexicalNestedComposer } from '@lexical/react/LexicalNestedComposer'
+import { LexicalExtensionEditorComposer } from '@lexical/react/LexicalExtensionEditorComposer'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import * as RadixPopover from '@radix-ui/react-popover'
 import {
@@ -10,21 +10,18 @@ import {
   COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_EDITOR,
   COMMAND_PRIORITY_LOW,
-  EditorThemeClasses,
   FOCUS_COMMAND,
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
   LexicalEditor,
-  createEditor
+  LexicalEditorWithDispose
 } from 'lexical'
 import * as Mdast from 'mdast'
 import React, { ElementType } from 'react'
 import { exportLexicalTreeToMdast } from '../../exportMarkdownFromLexical'
 import { importMdastTreeToLexical } from '../../importMarkdownToLexical'
-import { lexicalTheme } from '../../styles/lexicalTheme'
 import { TableNode } from './TableNode'
 
-import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin'
 import { mergeRegister } from '@lexical/utils'
 import * as RadixToolbar from '@radix-ui/react-toolbar'
 import classNames from 'classnames'
@@ -49,6 +46,7 @@ import {
   usedLexicalNodes$
 } from '../core'
 import { useCellValues } from '@mdxeditor/gurx'
+import { createExtensionEditor } from '../core/lexicalExtensions'
 
 /**
  * Returns the element type for the cell based on the rowIndex
@@ -362,30 +360,40 @@ const CellEditor: React.FC<CellProps> = ({ focus, setActiveCell, parentEditor, l
     tableCellEditorChildren$
   )
 
-  const [editor] = React.useState(() => {
-    const editor = createEditor({
+  const [editor, setEditor] = React.useState<LexicalEditorWithDispose | null>(null)
+
+  React.useEffect(() => {
+    const editor = createExtensionEditor({
+      name: '@mdxeditor/table-cell',
       nodes: usedLexicalNodes,
-      theme: lexicalTheme as EditorThemeClasses,
-      namespace: 'TableCellEditor'
+      namespace: 'TableCellEditor',
+      parentEditor,
+      historyMode: 'table-local',
+      initialEditorState: () => {
+        importMdastTreeToLexical({
+          root: $getRoot(),
+          mdastRoot: { type: 'root', children: [{ type: 'paragraph', children: contents }] },
+          visitors: importVisitors,
+          jsxComponentDescriptors,
+          directiveDescriptors,
+          codeBlockEditorDescriptors,
+          defaultCodeBlockLanguage
+        })
+      }
     })
-
-    editor.update(() => {
-      importMdastTreeToLexical({
-        root: $getRoot(),
-        mdastRoot: { type: 'root', children: [{ type: 'paragraph', children: contents }] },
-        visitors: importVisitors,
-        jsxComponentDescriptors,
-        directiveDescriptors,
-        codeBlockEditorDescriptors,
-        defaultCodeBlockLanguage
-      })
-    })
-
-    return editor
-  })
+    setEditor(editor)
+    return () => {
+      editor.dispose()
+    }
+    // The editor owns the complete mount-time plugin/configuration snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const saveAndFocus = React.useCallback(
     (nextCell: [number, number] | null) => {
+      if (!editor) {
+        return
+      }
       editor.getEditorState().read(() => {
         const mdast = exportLexicalTreeToMdast({
           root: $getRoot(),
@@ -408,6 +416,9 @@ const CellEditor: React.FC<CellProps> = ({ focus, setActiveCell, parentEditor, l
   )
 
   React.useEffect(() => {
+    if (!editor) {
+      return
+    }
     return mergeRegister(
       editor.registerCommand(
         KEY_TAB_COMMAND,
@@ -466,20 +477,23 @@ const CellEditor: React.FC<CellProps> = ({ focus, setActiveCell, parentEditor, l
   }, [colIndex, editor, rootEditor, rowIndex, saveAndFocus, setActiveCell])
 
   React.useEffect(() => {
-    if (focus) {
+    if (focus && editor) {
       editor.focus()
     }
   }, [focus, editor])
 
+  if (!editor) {
+    return null
+  }
+
   return (
-    <LexicalNestedComposer initialEditor={editor}>
+    <LexicalExtensionEditorComposer initialEditor={editor}>
       <RichTextPlugin contentEditable={<ContentEditable />} placeholder={<div></div>} ErrorBoundary={LexicalErrorBoundary} />
 
       {tableCellEditorChildren.map((Child, index) => (
         <Child key={index} />
       ))}
-      <HistoryPlugin />
-    </LexicalNestedComposer>
+    </LexicalExtensionEditorComposer>
   )
 }
 
