@@ -112,6 +112,19 @@ async function stopProcessGroup(child) {
   }
 }
 
+export async function runInterruptCleanup(processes, cleanup, stop = stopProcessGroup) {
+  const stopResults = await Promise.allSettled([...processes].map(stop))
+  const errors = stopResults.filter((result) => result.status === 'rejected').map((result) => result.reason)
+  try {
+    await cleanup()
+  } catch (error) {
+    errors.push(error)
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Interrupt cleanup failed')
+  }
+}
+
 export function installInterruptCleanup(cleanup) {
   let handlingSignal = false
   const handlers = new Map()
@@ -122,8 +135,10 @@ export function installInterruptCleanup(cleanup) {
     const handler = () => {
       if (handlingSignal) return
       handlingSignal = true
-      void Promise.all([...activeProcesses].map(stopProcessGroup))
-        .then(cleanup)
+      void runInterruptCleanup(activeProcesses, cleanup)
+        .catch((error) => {
+          console.error(error)
+        })
         .finally(() => process.exit(exitCode))
     }
     handlers.set(signal, handler)

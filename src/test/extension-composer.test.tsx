@@ -2,7 +2,7 @@ import { getExtensionDependencyFromEditor } from '@lexical/extension'
 import { createEmptyHistoryState, HistoryExtension } from '@lexical/history'
 import { LexicalExtensionEditorComposer } from '@lexical/react/LexicalExtensionEditorComposer'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { useRealm, type Realm } from '@mdxeditor/gurx'
+import { Realm, useRealm } from '@mdxeditor/gurx'
 import { render, waitFor } from '@testing-library/react'
 import {
   $createParagraphNode,
@@ -16,7 +16,7 @@ import {
 import React from 'react'
 import { describe, expect, it } from 'vitest'
 import { RealmWithPlugins, type RealmPlugin } from '../RealmWithPlugins'
-import { registerRealmCleanup } from '../realmSession'
+import { disposeRealmSession, registerRealmCleanup } from '../realmSession'
 import { createExtensionEditor, editorUsesHistoryState } from '../plugins/core/lexicalExtensions'
 import { MDXEditor, type MDXEditorMethods } from '../MDXEditor'
 
@@ -176,6 +176,90 @@ describe('extension editor construction', () => {
 })
 
 describe('realm session lifecycle', () => {
+  it('runs every cleanup in reverse order and preserves the first cleanup failure', () => {
+    const realm = new Realm()
+    const order: string[] = []
+    const firstFailure = new Error('later registration failed first')
+
+    registerRealmCleanup(realm, () => {
+      order.push('first registration')
+    })
+    registerRealmCleanup(realm, () => {
+      order.push('throwing registration')
+      throw firstFailure
+    })
+    registerRealmCleanup(realm, () => {
+      order.push('last registration')
+    })
+
+    expect(() => {
+      disposeRealmSession(realm)
+    }).toThrow(firstFailure)
+    expect(order).toEqual(['last registration', 'throwing registration', 'first registration'])
+    expect(() => {
+      disposeRealmSession(realm)
+    }).not.toThrow()
+  })
+
+  it('reports falsy cleanup failures instead of silently dropping them', () => {
+    const realm = new Realm()
+    registerRealmCleanup(realm, () => {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- verifies cleanup values from untyped consumer JavaScript.
+      throw false
+    })
+
+    expect(() => {
+      disposeRealmSession(realm)
+    }).toThrow('Realm cleanup failed with a non-Error value')
+  })
+
+  it('cleans up a failed plugin session without replacing its initialization error', () => {
+    const initializationFailure = new Error('postInit failed')
+    let cleanups = 0
+    const plugin: RealmPlugin = {
+      init(realm) {
+        registerRealmCleanup(realm, () => {
+          cleanups++
+        })
+      },
+      postInit() {
+        throw initializationFailure
+      }
+    }
+
+    expect(() => {
+      render(<RealmWithPlugins plugins={[plugin]}>unreachable</RealmWithPlugins>)
+    }).toThrow(initializationFailure)
+    expect(cleanups).toBe(1)
+  })
+
+  it('cleans up failed plugin sessions and keeps both failures when cleanup also fails', () => {
+    const initializationFailure = new Error('postInit failed')
+    const cleanupFailure = new Error('cleanup failed')
+    let cleanups = 0
+    const plugin: RealmPlugin = {
+      init(realm) {
+        registerRealmCleanup(realm, () => {
+          cleanups++
+          throw cleanupFailure
+        })
+      },
+      postInit() {
+        throw initializationFailure
+      }
+    }
+
+    let thrown: unknown
+    try {
+      render(<RealmWithPlugins plugins={[plugin]}>unreachable</RealmWithPlugins>)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AggregateError)
+    expect((thrown as AggregateError).errors).toEqual([initializationFailure, cleanupFailure])
+    expect(cleanups).toBe(1)
+  })
+
   it('keeps public methods available to parent layout and mount effects without render-time Realm setup', async () => {
     const editorRef = React.createRef<MDXEditorMethods>()
     let layoutRef: MDXEditorMethods | null = null

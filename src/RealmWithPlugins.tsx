@@ -42,7 +42,7 @@ export function realmPlugin<Params>(plugin: {
 }
 
 /** @internal */
-export function RealmWithPlugins({ children, plugins }: { children: React.ReactNode; plugins: RealmPlugin[] }) {
+When export function RealmWithPlugins({ children, plugins }: { children: React.ReactNode; plugins: RealmPlugin[] }) {
   const [theRealm, setTheRealm] = React.useState<Realm | null>(null)
 
   React.useEffect(() => {
@@ -55,7 +55,11 @@ export function RealmWithPlugins({ children, plugins }: { children: React.ReactN
         plugin.postInit?.(realm)
       }
     } catch (error) {
-      disposeRealmSession(realm)
+      try {
+        disposeRealmSession(realm)
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Realm plugin initialization and cleanup both failed')
+      }
       throw error
     }
     setTheRealm(realm)

@@ -122,6 +122,14 @@ const SearchControls = () => {
       <button
         type="button"
         onClick={() => {
+          search.replaceAll('')
+        }}
+      >
+        Delete all
+      </button>
+      <button
+        type="button"
+        onClick={() => {
           if (search.currentRange) search.scrollToRangeOrIndex(search.currentRange, { ignoreIfInView: false, behavior: 'auto' })
         }}
       >
@@ -239,6 +247,36 @@ describe('public search cells and helpers', () => {
 })
 
 describe('state-backed search and replacement', () => {
+  it('maps normalized expansions through the real editor without splitting source characters', async () => {
+    const ref = renderSearchEditor('café 🄀 🚀')
+
+    await setSearch('e\u0301')
+    await waitForTotal(1)
+    expect(screen.getByLabelText('Current match')).toHaveTextContent('é')
+
+    await setSearch('0')
+    await waitForTotal(1)
+    expect(screen.getByLabelText('Current match')).toHaveTextContent('🄀')
+    fireEvent.click(screen.getByRole('button', { name: 'Replace all' }))
+
+    await waitFor(() => {
+      expect(ref.current?.getMarkdown()).toBe('café $& 🚀')
+    })
+  })
+
+  it('deletes a whole-node match without leaving an empty text artifact', async () => {
+    const ref = renderSearchEditor('alpha')
+    await setSearch('alpha')
+    await waitForTotal(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all' }))
+
+    await waitFor(() => {
+      expect(ref.current?.getMarkdown()).toBe('')
+    })
+    expect(screen.getByLabelText('Search total')).toHaveTextContent('0')
+  })
+
   it('tracks programmatic mutation and recovers from invalid and zero-length regexes', async () => {
     const ref = renderSearchEditor('al**pha** beta alpha KEEP')
     await setSearch('alpha')

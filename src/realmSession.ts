@@ -21,15 +21,19 @@ export function disposeRealmSession(realm: Realm): void {
     return
   }
 
+  let hasError = false
   let firstError: unknown
   for (const cleanup of [...cleanups].reverse()) {
     try {
       cleanup()
     } catch (error) {
-      firstError ??= error
+      if (!hasError) {
+        hasError = true
+        firstError = error
+      }
     }
   }
-  if (firstError) {
+  if (hasError) {
     throw firstError instanceof Error ? firstError : new Error('Realm cleanup failed with a non-Error value')
   }
 }
